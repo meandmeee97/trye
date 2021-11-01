@@ -37,17 +37,33 @@ elif len(data) > 1:
 else:
     items = data[0]
 for x in items:
-    if x.name not in load_json(get_svar("magic_common")) and x.name not in load_json(get_svar("magic_uncommon")):
+    if x.get("rarity") and x.name not in load_json(get_svar("magic_common", [])) and x.name not in load_json(get_svar("magic_uncommon", [])):
         items.remove(x)
 a.pop(0)
 catalogue = []
+common = []
+uncommon = []
 for x in items:
-    itemName = " ".join([y.capitalize() for y in x.name.split()])
-    price = f'{x.price}gp' if not shopName.startswith("Magic") else f'{int(x.price*percentage)}gp'
-    catalogue.append(f'''• {itemName} ({price})''')
+    if not items[0].get("rarity"):
+        itemName = " ".join([y.capitalize() for y in x.name.split()])
+        price = f'{x.price}gp'
+        catalogue.append(f'''• {itemName} ({price})''')
+    elif items[0].get("rarity").lower() == "common":
+        itemName = " ".join([y.capitalize() for y in x.name.split()])
+        price = f'{int(x.price*percentage)}gp'
+        common.append(f'''• {itemName} ({price})''')
+    elif items[0].get("rarity").lower() == "uncommon":
+        itemName = " ".join([y.capitalize() for y in x.name.split()])
+        price = f'{int(x.price*percentage)}gp'
+        uncommon.append(f'''• {itemName} ({price})''')
 if not a:
     out.append(f'''-title "{shopName} Items" ''')
-    out.append(f'''-desc "```\n{n.join(catalogue)}```" ''')
+    if not common and not uncommon and catalogue:
+        out.append(f'''-desc "```\n{n.join(catalogue)}```" ''')
+    if common:
+        out.append(f'''-f "Common|```{n.join(common)}```|inline" ''')
+    if uncommon:
+        out.append(f'''-f "Uncommon|```{n.join(uncommon)}```|inline" ''')
     return n.join(out)
 elif a[0].lower() == "buy":
     a.pop(0)
@@ -55,12 +71,12 @@ elif a[0].lower() == "buy":
     for x in items:
         if " ".join(a).lower() == x.name.lower():
             itemName = " ".join([y.capitalize() for y in x.name.split()])
-            price = f'{x.price}gp' if not shopName.startswith("Magic") else f'{int(x.price*percentage)}gp'
+            price = f'{x.price}gp' if not x.get("rarity") else f'{int(x.price*percentage)}gp'
             itemCount = 1
             break           
         if all([y.lower() in x.name.lower() for y in a]):
             itemName = " ".join([y.capitalize() for y in x.name.split()])
-            price = f'{x.price}gp' if not shopName.startswith("Magic") else f'{int(x.price*percentage)}gp'
+            price = f'{x.price}gp' if not x.get("rarity") else f'{int(x.price*percentage)}gp'
             itemCount += 1
     if not itemCount:
         itemName = " ".join(a)
@@ -74,6 +90,68 @@ elif a[0].lower() == "buy":
         out.append(f''' -title "{name} is trying to buy {an} `{itemName}` from the {shopName}!" ''')
         out.append(f''' -desc "I'm sorry. That name is too vague. These are the items I am currently selling:\n```\n{n.join(catalogue)}```" ''')
         return n.join(out)
+        
+        
+    elif itemCount == 1 and itemName.endswith("+1"):
+        an = "an" if itemName[0].upper() in ["A","E","I","O","U"] else "a"
+        out.append(f''' -title "{name} has upgraded to {an} `{itemName}` in the {shopName}!" ''')
+        out.append(f''' -desc "That will cost you {price} and your {itemName.rstrip(", +1")}. Thank you and have a wonderful day!" ''')
+        coins = load_json(bags)
+        coinbag = []
+        itembag = []
+        olditem = []
+        money = []
+        for x in coins:
+            if x[0] == "Coin Pouch":
+                coinbag = x
+                break
+        if not coinbag:
+            coins.append(coinbag:=["Coin Pouch", {"cp": 0, "sp": 0, "ep": 0, "gp": 0, "pp": 0}])
+        for x in coins:
+            if itemName in x[1]:
+                itembag = x
+                break
+            if x[0] == "Shopping Bag":
+                itembag = x
+        for x in coins:
+            if itemName.rstrip(", +1") in x[1]:
+                olditem = x
+                break
+        if not olditem:
+            out.append(f''' -title "{name} is trying to upgrade their {itemName.rstrip(", +1")} at the {shopName}!" ''')
+            out.append(f''' -desc "You don't seem to own {an} {itemName.rstrip(", +1")}. You will need to purchase one first." ''')
+            return n.join(out)
+        num = olditem[1][itemName.rstrip(", +1")]
+        if num > 1:
+            olditem[1].update({itemName.rstrip(", +1"):amt-1})
+        else:
+            olditem[1].pop(itemName.rstrip(", +1"))
+            if not olditem[1] and olditem[0] != itembag[0]:
+                coins.remove(olditem)
+        if not itembag:
+            coins.append(itembag:=["Shopping Bag", {}])
+        if (cur:=int(coinbag[1]["gp"])) >= (cost:=int(price.rstrip("gp"))):
+            coinbag[1].update({"gp": cur - cost})
+            amt = 0
+            if itemName in itembag[1]:
+                amt = int(itembag[1][itemName])
+            itembag[1].update({itemName: amt + 1})
+            character().set_cvar("bags", dump_json(coins))
+        else:
+            out.append(f''' -title "{name} is trying to upgrade their `{itemName.rstrip(", +1")}` at the {shopName}" ''')
+            out.append(f''' -desc "That will cost you {price}. Oh! It doesn't look like you can afford it." ''')
+            return n.join(out)
+        for x in coinbag[1]:
+            money.append(f'''{coinbag[1][x]} {x}''')
+        if itembag[1]:
+            out.append(f''' -f "{itembag[0]}|{n.join(f"""{str(itembag[1][x])+" " if itembag[1][x] else ""}{x}""" for x in itembag[1])}" ''')
+        if olditem[1] and olditem[0] != itembag[0]:
+            out.append(f''' -f "{olditem[0]}|{n.join(f"""{str(olditem[1][x])+" " if olditem[1][x] > 1 else ""}{x}""" for x in olditem[1])}" ''')
+        if money:
+            out.append(f''' -f "Coin Pouch (-{price})|{n.join(money)}" ''')
+        return n.join(out)
+        
+        
     else:
         an = "an" if itemName[0].upper() in ["A","E","I","O","U"] else "a"
         out.append(f''' -title "{name} has purchased {an} `{itemName}` from the {shopName}!" ''')
@@ -103,13 +181,14 @@ elif a[0].lower() == "buy":
             itembag[1].update({itemName: amt + 1})
             character().set_cvar("bags", dump_json(coins))
         else:
-            out.append(f''' -title "{name} is trying to buy {an} `{itemName}` from the {shopName}" ''')
+            out.append(f''' -title "{name} is trying to buy {an} `{itemName}` from the {shopName}!" ''')
             out.append(f''' -desc "That will cost you {price}. Oh! It doesn't look like you can afford it." ''')
             return n.join(out)
         for x in coinbag[1]:
             money.append(f'''{coinbag[1][x]} {x}''')
-        if money:
-            out.append(f''' -f "{itembag[0]}|{n.join(f"""{str(itembag[1][x])+" " if itembag[1][x] else ""}{x}""" for x in itembag[1])}" ''')
+        if itembag[1]:
+            out.append(f''' -f "{itembag[0]}|{n.join(f"""{str(itembag[1][x])+" " if itembag[1][x] > 1 else ""}{x}""" for x in itembag[1])}" ''')
+        if money:    
             out.append(f''' -f "Coin Pouch (-{price})|{n.join(money)}" ''')
         return n.join(out)    
 elif a[0].lower() == "sell":
@@ -122,12 +201,12 @@ elif a[0].lower() == "sell":
     for x in items:
         if " ".join(a).lower() == x.name.lower():
             itemName = " ".join([y.capitalize() for y in x.name.split()])
-            price = f'{x.price//4}gp' if not shopName.startswith("Magic") else f'{int(x.price*percentage)}gp'
+            price = f'{x.price//4}gp' if not x.get("rarity") else f'{int(x.price*percentage)}gp'
             itemCount = 1
             break         
         if all([y.lower() in x.name.lower() for y in a]):
             itemName = " ".join([y.capitalize() for y in x.name.split()])
-            price = f'{x.price//4}gp' if not shopName.startswith("Magic") else f'{int((x.price//4)*percentage)}gp'
+            price = f'{x.price//4}gp' if not x.get("rarity") else f'{int((x.price//4)*percentage)}gp'
             itemCount += 1
     if not itemCount:
         itemName = " ".join(a)
@@ -143,15 +222,13 @@ elif a[0].lower() == "sell":
         return n.join(out)
     else:
         an = "an" if itemName[0].upper() in ["A","E","I","O","U"] else "a"
-        out.append(f''' -title "{name} has sold {an} `{itemName}` to the {shopName}!" ''')
-        out.append(f''' -desc "Here's {price}. Do you have anything else for me to buy?" ''')
         coins = load_json(bags)
         for x in coins:
             if itemName in x[1]:
                 itembag = x
                 break
         if not itembag:
-            out.append(f''' -title "{name} tries to seld {an} `{itemName}` to the {shopName}"''')
+            out.append(f''' -title "{name} is trying to sell {an} `{itemName}` to the {shopName}!"''')
             out.append(f''' -desc "You don't seem to own {an} `{itemName}`. Is there something else you would like to sell?" ''')
             return n.join(out)
         amt = itembag[1][itemName]
@@ -169,8 +246,14 @@ elif a[0].lower() == "sell":
             coins.append(coinbag:=["Coin Pouch", {"cp": 0, "sp": 0, "ep": 0, "gp": 0, "pp": 0}])
         cur = int(coinbag[1]["gp"])
         cost = int(price.rstrip("gp"))
+        if not cost:
+            out.append(f''' -title "{name} is trying to sell {an} `{itemName}` to the {shopName}!" ''')
+            out.append(f''' -desc "I'm sorry but that {itemName} isn't worth anything to me." ''')
+            return n.join(out)
         coinbag[1].update({"gp": cur + cost})
         character().set_cvar("bags",dump_json(coins))
+        out.append(f''' -title "{name} has sold {an} `{itemName}` to the {shopName}!" ''')
+        out.append(f''' -desc "Here's {price}. Do you have anything else for me to buy?" ''')
         for x in coinbag[1]:
             money.append(f'''{coinbag[1][x]} {x}''')
         if money:
@@ -182,12 +265,12 @@ else:
     for x in items:
         if " ".join(a).lower() == x.name.lower():
             itemName = " ".join([y.capitalize() for y in x.name.split()])
-            price = f'{x.price}gp' if not shopName.startswith("Magic") else f'{int(x.price*percentage)}gp'
+            price = f'{x.price}gp' if not x.get("rarity") else f'{int(x.price*percentage)}gp'
             itemCount = 1
             break           
         if all([y.lower() in x.name.lower() for y in a]):
             itemName = " ".join([y.capitalize() for y in x.name.split()])
-            price = f'{x.price}gp' if not shopName.startswith("Magic") else f'{int(x.price*percentage)}gp'
+            price = f'{x.price}gp' if not x.get("rarity") else f'{int(x.price*percentage)}gp'
             itemCount += 1
     if not itemCount:
         itemName = " ".join(a)
@@ -200,6 +283,12 @@ else:
         an = "an" if itemName[0].upper() in ["A","E","I","O","U"] else "a"
         out.append(f''' -title "{name} is looking for {an} `{itemName}` in the {shopName}!" ''')
         out.append(f''' -desc "I'm sorry. That name is too vague. These are the items I am currently selling:\n```\n{n.join(catalogue)}```" ''')
+        return n.join(out)
+    elif itemCount == 1 and itemName.endswith("+1"):
+        an = "an" if itemName[0].upper() in ["A","E","I","O","U"] else "a"
+        out.append(f''' -title "{name} is looking to upgrade their `{itemName.rstrip(", +1")}` in the {shopName}!" ''')
+        out.append(f''' -desc "To upgrade your weapon, I'll need your current `{itemName.rstrip(", +1")}` and it will cost {price}. Would you like to upgrade it?" ''')
+        out.append(f''' -f "Command to upgrade|`{ctx.prefix}{ctx.alias} {shopName} buy {itemName}`" ''')
         return n.join(out)
     else:
         an = "an" if itemName[0].upper() in ["A","E","I","O","U"] else "a"
