@@ -1,12 +1,14 @@
 <drac2>
-if ctx.author.id not in [486296335180627972, 306209506965061633] and not get_svar("crafting"):
-    err("Haha. April Fools!")
 a, n, out = &ARGS&, "\n", []
 cvar = "crafting_data"
 cooldown = 24
 t = time()
 stats = load_json(get(cvar, {}))
 bonus = character().levels.get("Artificer") >= 10
+gvars = load_json(get_svar("crafting", []))
+
+if not ctx.author.id in [486296335180627972, 306209506965061633] and not gvars:
+    err("Haha! April Fools!")
 
 data = [
         {
@@ -48,18 +50,12 @@ elif t < stats.get("cooldown", 0):
 
 elif stats: # New crafting day. If day % 5, roll 1d20
     item = stats["item"]
+    day = stats["day"]
     remaining = stats["remaining"] - 1
     cooldown = t + (cooldown * 3600)
     fail = False
-    
-    for x in data:
-        
-        if x["rarity"] == item:
-            weeks = x["weeks"]
-            days = weeks * 7
-            break
 
-    if not (days - remaining) % 5: # complication
+    if not day % 5: # complication
         r = vroll("1d20")
         
         if remaining:
@@ -74,7 +70,7 @@ elif stats: # New crafting day. If day % 5, roll 1d20
             out.append(f''' -f "Outcome|You finished another day of crafting without any complications. Please return tomorrow to continue." ''')
             
         else:
-            out.append(f''' -desc "Congratulations! You have finally finished crafting your {item} item. You will need to manually add the item to your inventory." ''')
+            out.append(f''' -desc "Congratulations! You have finally finished crafting your {item}. It has been added to your bag." ''')
             character().delete_cvar(cvar)
             
     else:
@@ -84,42 +80,75 @@ elif stats: # New crafting day. If day % 5, roll 1d20
             out.append(f''' -desc "You finished another day of crafting without any complications. Please return tomorrow to continue." ''')
         
         else:
-            out.append(f''' -desc "Congratulations! You have finally finished crafting your {item} item. You will need to manually add the item to your inventory." ''')
+            out.append(f''' -desc "Congratulations! You have finally finished crafting your {item}. It has been added to your bag." ''')
             character().delete_cvar(cvar)
     
     if remaining:
         stats.update({"cooldown": cooldown})
         character().set_cvar(cvar, dump_json(stats))
         out.append(f''' -f "Days Remaining|{remaining}" ''')
-    
-    out.append(f''' -title "{name} continues crafting their {item} item!" -footer "{ctx.prefix}{ctx.alias}" ''')
+        
+    else:
+        itemVar = load_json(get("bags", []))
+        itemBag = []
+        qty = 1
+        
+        for x in itemVar:
+            
+            if item in x[1]:
+                itemBag = x
+                break
+                
+            if x[0] == "Shopping Bag":
+                itemBag = x
+                
+        if not itemBag:
+            itemVar.append(itemBag:=["Shopping Bag", {}])
+            
+        qty = itemBag[1].get(item, 0) + qty
+        itemBag[1].update({item: qty})
+        character().set_cvar("bags", dump_json(itemVar))
+        out.append(f''' -f "{itemBag[0]}|{n.join(f"""{y} {x}""" if y > 1 else f"""{x}""" for x, y in itemBag[1].items())}" ''')
+        
+    out.append(f''' -title "{name} continues crafting their {item}!" -footer "{ctx.prefix}{ctx.alias}" ''')
         
 
 elif a: # Crafting new thingy
-    rarity = ""
     scroll = False
+    potion = False
+    items = []
+    atext = " ".join(a)            
     
-    for x in a:
+    for x in gvars:
     
-        if x.lower() == "scroll":
-            scroll = True
-            a.remove(x)
-            break
-    
-    for x in ["common", "uncommon", "rare", "very rare"]:
-    
-        if x.startswith(a[0].lower()):
-            rarity = x
-            break
-            
-    if not rarity:
-        return f'''help {ctx.alias} -here'''
+        itemGvar = load_json(get_gvar(x))
         
+        for y in itemGvar:
+            if atext.lower().replace("scroll", "").replace("potion", "") in y.name.lower():
+                items.append(y)
+                
+    for x in items:
+        if atext.lower() == x.name.lower():
+            items = [x]
+            break
+    
+    if not items:
+        out.append(f''' -title "{name} is trying to craft {atext}!"
+                           -desc "This item is not available for crafting." ''')
+
     else:
         stats = {}
+        item = items[0]["name"]
+        rarity = items[0]["rarity"]
+        type = items[0].get("type", "")
+        
+        if type.lower() == "scroll":
+            scroll = True
+        elif type.lower() == "potion":
+            potion = True
         
         for x in data:
-        
+
             if x.rarity == rarity:
                 stats = x
         
@@ -128,14 +157,13 @@ elif a: # Crafting new thingy
         coinvar = load_json(get("bags",[]))
         coinbag = []
         
-        if scroll:
+        if scroll or potion:
             days = ceil(days / 2)
             cost = ceil(cost / 2)
             
         if bonus and rarity in ["common", "uncommon"]:
             days = ceil(days / 4)
             cost = ceil(cost / 2)
-            
         
         for x in coinvar:
         
@@ -148,19 +176,19 @@ elif a: # Crafting new thingy
             
             if coins >= cost:
                 x[1].update({"gp": coins - cost})
-                saved = {"item": rarity, "day": 0, "remaining": days, "cooldown": t + cooldown * 3600}
+                saved = {"item": item, "day": 1, "remaining": days, "cooldown": t + cooldown * 3600}
                 character().set_cvar(cvar, dump_json(saved))
-                out.append(f''' -title "{name} has started crafting {'an' if rarity[0] in ['a', 'e', 'i', 'o', 'u'] else 'a'} {rarity} item!"
+                out.append(f''' -title "{name} has started crafting {'an' if item[0].lower() in ['a', 'e', 'i', 'o', 'u'] else 'a'} {item}!"
                                 -desc "Your first day of crafting has been completed. Please return tomorrow to continue."
                                 -f "Days Remaining|{days}|inline"
                                 -f "Cost|{cost} gp|inline"
                                 -f "{coinbag[0]} (-{cost} gp)|{n.join([f'{coinbag[1][x]} {x}' for x in coinbag[1]])}"
-                                -footer "{ctx.prefix}{ctx.alias} {rarity} | {cost} gp has been removed from your {coinbag[0]}" ''')
+                                -footer "{ctx.prefix}{ctx.alias} {item} | {cost} gp has been removed from your {coinbag[0]}" ''')
                 
             else:
                 coinvar.append(["Coin Pouch", {"cp": 0, "sp": 0, "ep": 0, "gp": 0, "pp": 0}])
                 out.append(f''' -title "{name} tries to start crafting!"
-                                -desc "You do not have enough money to begin crafting {'an' if rarity[0] in ['a', 'e', 'i', 'o', 'u'] else 'a'} {rarity} item."
+                                -desc "You do not have enough money to begin crafting {'an' if item[0].lower() in ['a', 'e', 'i', 'o', 'u'] else 'a'} {item}."
                                 -f "Cost|{cost} gp"
                                 -footer "{ctx.prefix}help {ctx.alias}" ''')
                 
